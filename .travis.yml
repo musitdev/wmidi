@@ -12,6 +12,6 @@ before_cache:
 before_script:
   - rustup component add clippy
 script:
-  - cargo build --verbose all
+  - cargo build --verbose
   - cargo test --verbose all
   - cargo clippy --all-targets -- -D warnings
