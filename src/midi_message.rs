@@ -1,4 +1,5 @@
 use crate::{Error, Note, ToSliceError, U14, U7};
+use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::io;
 
@@ -38,16 +39,7 @@ pub enum MidiMessage<'a> {
     /// 3 bytes. Two of the 1 Byte IDs are reserved for extensions called Universal Exclusive Messages, which are not
     /// manufacturer-specific. If a device recognizes the ID code as its own (or as a supported Universal message) it
     /// will listen to the rest of the message. Otherwise the message will be ignored.
-    SysEx(&'a [U7]),
-
-    /// This message type allows manufacturers to create their own messages (such as bulk dumps, patch parameters, and
-    /// other non-spec data) and provides a mechanism for creating additional MIDI Specification messages.
-    ///
-    /// In the data held by the SysEx message, the Manufacturer's ID code (assigned by MMA or AMEI) is either 1 byte or
-    /// 3 bytes. Two of the 1 Byte IDs are reserved for extensions called Universal Exclusive Messages, which are not
-    /// manufacturer-specific. If a device recognizes the ID code as its own (or as a supported Universal message) it
-    /// will listen to the rest of the message. Otherwise the message will be ignored.
-    OwnedSysEx(Vec<U7>),
+    SysEx(Cow<'a, [U7]>),
 
     /// MIDI Time Code Quarter Frame.
     ///
@@ -192,11 +184,6 @@ impl<'a> MidiMessage<'a> {
                     slice[1..1 + b.len()].copy_from_slice(U7::data_to_bytes(b));
                     slice[1 + b.len()] = 0xF7;
                 }
-                MidiMessage::OwnedSysEx(ref b) => {
-                    slice[0] = 0xF0;
-                    slice[1..1 + b.len()].copy_from_slice(U7::data_to_bytes(b));
-                    slice[1 + b.len()] = 0xF7;
-                }
                 MidiMessage::MidiTimeCode(a) => slice.copy_from_slice(&[0xF1, u8::from(*a)]),
                 MidiMessage::SongPositionPointer(a) => {
                     let (a1, a2) = split_data(*a);
@@ -229,8 +216,8 @@ impl<'a> MidiMessage<'a> {
             MidiMessage::ProgramChange(a, b) => Some(MidiMessage::ProgramChange(a, b)),
             MidiMessage::ChannelPressure(a, b) => Some(MidiMessage::ChannelPressure(a, b)),
             MidiMessage::PitchBendChange(a, b) => Some(MidiMessage::PitchBendChange(a, b)),
-            MidiMessage::SysEx(_) => None,
-            MidiMessage::OwnedSysEx(bytes) => Some(MidiMessage::OwnedSysEx(bytes)),
+            MidiMessage::SysEx(Cow::Borrowed(_)) => None,
+            MidiMessage::SysEx(Cow::Owned(b)) => Some(MidiMessage::SysEx(Cow::Owned(b))),
             MidiMessage::MidiTimeCode(a) => Some(MidiMessage::MidiTimeCode(a)),
             MidiMessage::SongPositionPointer(a) => Some(MidiMessage::SongPositionPointer(a)),
             MidiMessage::SongSelect(a) => Some(MidiMessage::SongSelect(a)),
@@ -259,8 +246,10 @@ impl<'a> MidiMessage<'a> {
             MidiMessage::ProgramChange(a, b) => MidiMessage::ProgramChange(a, b),
             MidiMessage::ChannelPressure(a, b) => MidiMessage::ChannelPressure(a, b),
             MidiMessage::PitchBendChange(a, b) => MidiMessage::PitchBendChange(a, b),
-            MidiMessage::SysEx(bytes) => MidiMessage::OwnedSysEx(bytes.to_vec()),
-            MidiMessage::OwnedSysEx(bytes) => MidiMessage::OwnedSysEx(bytes),
+            MidiMessage::SysEx(Cow::Borrowed(bytes)) => {
+                MidiMessage::SysEx(Cow::Owned(bytes.to_owned()))
+            }
+            MidiMessage::SysEx(Cow::Owned(bytes)) => MidiMessage::SysEx(Cow::Owned(bytes)),
             MidiMessage::MidiTimeCode(a) => MidiMessage::MidiTimeCode(a),
             MidiMessage::SongPositionPointer(a) => MidiMessage::SongPositionPointer(a),
             MidiMessage::SongSelect(a) => MidiMessage::SongSelect(a),
@@ -286,7 +275,6 @@ impl<'a> MidiMessage<'a> {
             MidiMessage::ChannelPressure(..) => 2,
             MidiMessage::PitchBendChange(..) => 3,
             MidiMessage::SysEx(b) => 2 + b.len(),
-            MidiMessage::OwnedSysEx(b) => 2 + b.len(),
             MidiMessage::MidiTimeCode(_) => 2,
             MidiMessage::SongPositionPointer(_) => 3,
             MidiMessage::SongSelect(_) => 2,
@@ -338,7 +326,7 @@ impl<'a> MidiMessage<'a> {
         // We've already gone through the bytes to find the first non data byte so we are assured
         // that values from 1..end_i are valid data bytes.
         let data_bytes = unsafe { U7::from_bytes_unchecked(&bytes[1..end_i]) };
-        Ok(MidiMessage::SysEx(data_bytes))
+        Ok(MidiMessage::SysEx(Cow::Borrowed(data_bytes)))
     }
 }
 
@@ -513,15 +501,15 @@ mod test {
 
         assert_eq!(
             MidiMessage::try_from([0xF0, 4, 8, 12, 16, 0xF7].as_ref()),
-            Ok(MidiMessage::SysEx(
+            Ok(MidiMessage::SysEx(Cow::Borrowed(
                 U7::try_from_bytes(&[4, 8, 12, 16]).unwrap()
-            ))
+            )))
         );
         assert_eq!(
             MidiMessage::try_from([0xF0, 3, 6, 9, 12, 15, 0xF7, 125].as_ref()),
-            Ok(MidiMessage::SysEx(
+            Ok(MidiMessage::SysEx(Cow::Borrowed(
                 U7::try_from_bytes(&[3, 6, 9, 12, 15]).unwrap()
-            ))
+            )))
         );
         assert_eq!(
             MidiMessage::try_from([0xF0, 1, 2, 3, 4, 5, 6, 7, 8, 9].as_ref()),
@@ -566,10 +554,11 @@ mod test {
     fn copy_to_slice_sysex() {
         let b = {
             let mut b = [0u8; 8];
-            let bytes_copied =
-                MidiMessage::SysEx(U7::try_from_bytes(&[10, 20, 30, 40, 50]).unwrap())
-                    .copy_to_slice(&mut b)
-                    .unwrap();
+            let bytes_copied = MidiMessage::SysEx(Cow::Borrowed(
+                U7::try_from_bytes(&[10, 20, 30, 40, 50]).unwrap(),
+            ))
+            .copy_to_slice(&mut b)
+            .unwrap();
             assert_eq!(bytes_copied, 7);
             b
         };
@@ -579,21 +568,22 @@ mod test {
     #[test]
     fn drop_unowned_sysex() {
         assert_eq!(
-            MidiMessage::SysEx(U7::try_from_bytes(&[1, 2, 3]).unwrap()).drop_unowned_sysex(),
+            MidiMessage::SysEx(Cow::Borrowed(U7::try_from_bytes(&[1, 2, 3]).unwrap()))
+                .drop_unowned_sysex(),
             None
         );
         assert_eq!(
-            MidiMessage::OwnedSysEx(vec![
-                U7::try_from(1).unwrap(),
-                U7::try_from(2).unwrap(),
-                U7::try_from(3).unwrap()
-            ])
-            .drop_unowned_sysex(),
-            Some(MidiMessage::OwnedSysEx(vec![
+            MidiMessage::SysEx(Cow::Owned(vec![
                 U7::try_from(1).unwrap(),
                 U7::try_from(2).unwrap(),
                 U7::try_from(3).unwrap()
             ]))
+            .drop_unowned_sysex(),
+            Some(MidiMessage::SysEx(Cow::Owned(vec![
+                U7::try_from(1).unwrap(),
+                U7::try_from(2).unwrap(),
+                U7::try_from(3).unwrap()
+            ])))
         );
         assert_eq!(
             MidiMessage::TuneRequest.drop_unowned_sysex(),
@@ -604,16 +594,16 @@ mod test {
     #[test]
     fn to_owned() {
         assert_eq!(
-            MidiMessage::SysEx(U7::try_from_bytes(&[1, 2, 3]).unwrap()).to_owned(),
-            MidiMessage::OwnedSysEx(vec![
+            MidiMessage::SysEx(Cow::Borrowed(U7::try_from_bytes(&[1, 2, 3]).unwrap())).to_owned(),
+            MidiMessage::SysEx(Cow::Owned(vec![
                 U7::try_from(1).unwrap(),
                 U7::try_from(2).unwrap(),
                 U7::try_from(3).unwrap()
-            ])
+            ]))
         );
         assert_ne!(
-            MidiMessage::SysEx(U7::try_from_bytes(&[1, 2, 3]).unwrap()).to_owned(),
-            MidiMessage::SysEx(U7::try_from_bytes(&[1, 2, 3]).unwrap())
+            MidiMessage::SysEx(Cow::Borrowed(U7::try_from_bytes(&[1, 2, 3]).unwrap())).to_owned(),
+            MidiMessage::SysEx(Cow::Borrowed(U7::try_from_bytes(&[1, 2, 3]).unwrap()))
         );
     }
 

@@ -2,6 +2,7 @@
 extern crate criterion;
 
 use criterion::{black_box, Criterion};
+use std::borrow::Cow;
 use std::convert::TryFrom;
 
 const MESSAGES: [wmidi::MidiMessage<'static>; 19] = [
@@ -13,7 +14,7 @@ const MESSAGES: [wmidi::MidiMessage<'static>; 19] = [
     wmidi::MidiMessage::ChannelPressure(wmidi::Channel::Ch6, wmidi::U7::MAX),
     wmidi::MidiMessage::PitchBendChange(wmidi::Channel::Ch7, wmidi::U14::MAX),
     wmidi::MidiMessage::Start,
-    wmidi::MidiMessage::SysEx(&[wmidi::U7::MIN, wmidi::U7::MAX]),
+    wmidi::MidiMessage::SysEx(Cow::Borrowed(&[wmidi::U7::MIN, wmidi::U7::MAX])),
     wmidi::MidiMessage::MidiTimeCode(wmidi::U7::MAX),
     wmidi::MidiMessage::SongPositionPointer(wmidi::U14::MIN),
     wmidi::MidiMessage::SongSelect(wmidi::U7::MIN),
