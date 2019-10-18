@@ -8,7 +8,7 @@ jobs:
     - rust: nightly
 cache: cargo
 before_cache:
-  - rm -rf "$TRAVIS_HOME/.cargo/registry/src"
+  - rm -rf "${TRAVIS_HOME}/.cargo/registry/src"
 before_script:
   - rustup component add clippy
 script:
